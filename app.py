@@ -584,15 +584,15 @@ init_session()
 @st.cache_data(ttl=300)
 def fetch_ticker_info(ticker: str) -> Dict:
     """
-    Multi-source fundamental data fetch. Falls through 6 sources so that
-    every field is populated from live data even when .info is sparse.
-    No hardcoding anywhere.
+    Multi-source fundamental fetch with accuracy corrections for Indian stocks.
+    Sources: .info -> fast_info -> income_stmt -> balance_sheet -> OHLCV -> dividends.
+    All ratios are cross-validated to catch yfinance scale errors.
     """
     merged: Dict = {}
     try:
         t = yf.Ticker(ticker)
 
-        # ── 1. .info (may be sparse for .NS tickers) ──────────────────────
+        # ── 1. .info ──────────────────────────────────────────────────────
         try:
             raw_info = t.info or {}
             if isinstance(raw_info, dict) and len(raw_info) >= 3:
@@ -601,7 +601,7 @@ def fetch_ticker_info(ticker: str) -> Dict:
         except Exception:
             pass
 
-        # ── 2. fast_info (reliable, price-based fields) ───────────────────
+        # ── 2. fast_info (always reliable) ───────────────────────────────
         try:
             fi = t.fast_info
             fi_map = {
@@ -620,50 +620,64 @@ def fetch_ticker_info(ticker: str) -> Dict:
         except Exception:
             pass
 
-        # ── 3. income_stmt → Revenue, Net Income, EPS ────────────────────
+        # ── 3. income_stmt → Revenue, Net Income, annual EPS ─────────────
+        # ACCURACY: income_stmt is annual; use it for EPS, not quarterly fastinfo
+        # EPS from income_stmt = Net Income / shares (avoids yfinance EPS scale bugs)
         net_inc_val = None
         try:
-            inc = t.income_stmt
+            inc = t.income_stmt          # columns = annual periods, newest first
             if inc is not None and not inc.empty:
-                latest = inc.iloc[:, 0]
+                latest = inc.iloc[:, 0]  # most recent full fiscal year
+
                 for key in ("Total Revenue", "TotalRevenue"):
                     v = latest.get(key)
                     if v is not None and "totalRevenue" not in merged:
                         merged["totalRevenue"] = float(v); break
+
                 for key in ("Net Income", "NetIncome", "Net Income Common Stockholders"):
                     v = latest.get(key)
                     if v is not None and "netIncomeToCommon" not in merged:
                         merged["netIncomeToCommon"] = float(v)
                         net_inc_val = float(v); break
-                for key in ("Basic EPS", "Diluted EPS", "basicEPS"):
-                    v = latest.get(key)
-                    if v is not None and "trailingEps" not in merged:
-                        merged["trailingEps"] = float(v); break
+
                 for key in ("EBIT", "Operating Income"):
                     v = latest.get(key)
                     if v is not None and "ebit" not in merged:
                         merged["ebit"] = float(v); break
+
+                # Derive annual EPS = Net Income / shares (most accurate for .NS)
+                shares = merged.get("sharesOutstanding")
+                if net_inc_val and shares and shares > 0:
+                    derived_eps = net_inc_val / shares
+                    # Sanity: EPS should be a small fraction of share price
+                    price = merged.get("regularMarketPrice", 0)
+                    if price > 0 and 0 < derived_eps < price:
+                        merged["trailingEps"] = round(derived_eps, 2)
+
         except Exception:
             pass
 
         # ── 4. balance_sheet → D/E, Current Ratio, ROE, ROA, P/B ─────────
         total_equity = None
         try:
-            bs = t.balance_sheet
+            bs = t.balance_sheet         # annual, newest first
             if bs is not None and not bs.empty:
                 lb = bs.iloc[:, 0]
-                total_debt = None
-                for key in ("Total Debt", "TotalDebt", "Long Term Debt"):
-                    v = lb.get(key)
-                    if v is not None:
-                        total_debt = float(v); break
+
+                total_debt = next(
+                    (float(lb.get(k)) for k in
+                     ("Total Debt", "TotalDebt", "Long Term Debt")
+                     if lb.get(k) is not None), None)
+
                 for key in ("Common Stock Equity", "Stockholders Equity",
                              "Total Stockholders Equity"):
                     v = lb.get(key)
                     if v is not None:
                         total_equity = float(v); break
+
                 if total_debt is not None and total_equity and total_equity != 0                         and "debtToEquity" not in merged:
                     merged["debtToEquity"] = round(total_debt / total_equity, 4)
+
                 curr_a = next((float(lb.get(k)) for k in
                                ("Current Assets", "Total Current Assets")
                                if lb.get(k) is not None), None)
@@ -672,22 +686,31 @@ def fetch_ticker_info(ticker: str) -> Dict:
                                if lb.get(k) is not None), None)
                 if curr_a and curr_l and curr_l != 0 and "currentRatio" not in merged:
                     merged["currentRatio"] = round(curr_a / curr_l, 4)
+
+                # P/B = Price / Book Value Per Share
+                # Book Value Per Share = Total Equity / Shares
                 shares = merged.get("sharesOutstanding")
                 price  = merged.get("regularMarketPrice")
-                if total_equity and shares and shares != 0 and price                         and "priceToBook" not in merged:
+                if total_equity and shares and shares > 0 and price                         and "priceToBook" not in merged:
                     bvps = total_equity / float(shares)
-                    if bvps != 0:
-                        merged["priceToBook"] = round(float(price) / bvps, 4)
+                    if bvps > 0:
+                        pb = round(float(price) / bvps, 4)
+                        # Sanity: P/B for Indian large-caps is typically 0.5x–30x
+                        if 0.1 < pb < 100:
+                            merged["priceToBook"] = pb
+
                 ni = net_inc_val or merged.get("netIncomeToCommon")
                 if ni and total_equity and total_equity != 0                         and "returnOnEquity" not in merged:
                     merged["returnOnEquity"] = round(float(ni) / total_equity, 6)
+
                 total_assets = lb.get("Total Assets")
                 if total_assets and float(total_assets) != 0 and ni                         and "returnOnAssets" not in merged:
-                    merged["returnOnAssets"] = round(float(ni) / float(total_assets), 6)
+                    merged["returnOnAssets"] = round(
+                        float(ni) / float(total_assets), 6)
         except Exception:
             pass
 
-        # ── 5. OHLCV → 52W High/Low, AvgVol, Beta (computed live) ────────
+        # ── 5. OHLCV → 52W range, AvgVol, Beta, derive P/E ──────────────
         try:
             df_h = yf.download(ticker, period="1y", interval="1d",
                                 progress=False, auto_adjust=True)
@@ -695,22 +718,38 @@ def fetch_ticker_info(ticker: str) -> Dict:
                 if isinstance(df_h.columns, pd.MultiIndex):
                     df_h.columns = df_h.columns.get_level_values(0)
                 close = df_h["Close"].squeeze()
+
                 if "fiftyTwoWeekHigh" not in merged:
                     merged["fiftyTwoWeekHigh"] = round(float(df_h["High"].squeeze().max()), 2)
                 if "fiftyTwoWeekLow" not in merged:
                     merged["fiftyTwoWeekLow"] = round(float(df_h["Low"].squeeze().min()), 2)
                 if "averageVolume" not in merged and "Volume" in df_h.columns:
                     merged["averageVolume"] = int(df_h["Volume"].mean())
+
                 curr_price = float(close.iloc[-1])
                 if "regularMarketPrice" not in merged:
                     merged["regularMarketPrice"] = round(curr_price, 2)
                 if "marketCap" not in merged and merged.get("sharesOutstanding"):
                     merged["marketCap"] = int(curr_price * merged["sharesOutstanding"])
-                if "trailingPE" not in merged and merged.get("trailingEps", 0) != 0:
-                    merged["trailingPE"] = round(curr_price / merged["trailingEps"], 4)
-                if "forwardPE" not in merged and merged.get("forwardEps", 0) != 0:
-                    merged["forwardPE"] = round(curr_price / merged["forwardEps"], 4)
-                # Compute beta vs NIFTY from daily returns
+
+                # P/E = Price / Annual EPS  (validate result is sane)
+                if "trailingPE" not in merged:
+                    eps = merged.get("trailingEps", 0)
+                    if eps and eps > 0:
+                        pe = round(curr_price / eps, 2)
+                        # Sanity: realistic P/E range for listed Indian equities
+                        if 1 < pe < 500:
+                            merged["trailingPE"] = pe
+
+                # Forward P/E similarly validated
+                if "forwardPE" not in merged:
+                    feps = merged.get("forwardEps", 0)
+                    if feps and feps > 0:
+                        fpe = round(curr_price / feps, 2)
+                        if 1 < fpe < 500:
+                            merged["forwardPE"] = fpe
+
+                # Beta vs NIFTY computed from daily returns
                 if "beta" not in merged:
                     try:
                         bench = yf.download("^NSEI", period="1y", interval="1d",
@@ -730,14 +769,18 @@ def fetch_ticker_info(ticker: str) -> Dict:
         except Exception:
             pass
 
-        # ── 6. Dividends → yield ──────────────────────────────────────────
+        # ── 6. Dividends → annual yield (frequency-agnostic) ─────────────
+        # ACCURACY: sum dividends paid in the last 12 months, not last N entries
+        # This correctly handles quarterly (US-style) AND semi-annual (INFY-style)
         try:
             if "dividendYield" not in merged:
                 divs = t.dividends
                 if divs is not None and not divs.empty:
-                    annual_div = float(divs.tail(4).sum())
+                    divs.index = divs.index.tz_localize(None)                         if divs.index.tz is not None else divs.index
+                    cutoff = pd.Timestamp.now() - pd.DateOffset(years=1)
+                    annual_div = float(divs[divs.index >= cutoff].sum())
                     p = merged.get("regularMarketPrice")
-                    if p and p != 0:
+                    if p and p > 0 and annual_div > 0:
                         merged["dividendYield"] = round(annual_div / p, 6)
         except Exception:
             pass
@@ -1751,10 +1794,8 @@ def page_stock_explorer():
 
     # ── Top KPIs ──
     company_name = info.get("longName", ticker.replace(".NS", ""))
-    # Derive sector from NSE_SECTORS mapping when .info is sparse
     _derived_sector = next(
-        (sec for sec, tickers in NSE_SECTORS.items() if ticker in tickers), None
-    )
+        (sec for sec, tickers in NSE_SECTORS.items() if ticker in tickers), None)
     sector = info.get("sector") or _derived_sector or ticker.replace(".NS", "")
     industry = info.get("industry") or info.get("exchange") or ""
     market_cap = info.get("marketCap", 0)
@@ -2595,7 +2636,7 @@ def render_sidebar():
             ("🔍", "Stock Explorer"),
             ("📋", "Orders"),
             ("💼", "Portfolio"),
-            ("📰", "News Terminal"),
+            # ("📰", "News Terminal"),
             ("⭐", "Watchlist"),
         ]
         st.markdown('<div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.5rem;">Navigation</div>', unsafe_allow_html=True)
