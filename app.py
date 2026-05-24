@@ -2590,7 +2590,7 @@ def render_sidebar():
         # User account widget
         if not st.session_state.user_name:
             st.markdown('<div style="font-size:0.7rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.4rem;">Create Account</div>', unsafe_allow_html=True)
-            name = st.text_input("Your Name", placeholder="e.g. Arjun Mehta")
+            name = st.text_input("Your Name", placeholder="e.g. Aryaan Pandhare")
             initial_funds = st.number_input("Starting Capital (₹)", min_value=10000, max_value=10000000, value=500000, step=10000)
             if st.button("Create Account →", type="primary", use_container_width=True) and name.strip():
                 st.session_state.user_name = name.strip()
