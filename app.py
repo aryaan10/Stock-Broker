@@ -209,9 +209,7 @@ CUSTOM_CSS = """
 }
 
 /* ── GLOBAL DYNAMIC FONT SCALING ── */
-html {
-    font-size: clamp(12px, 1.1vw, 16px);
-}
+html { font-size: clamp(12px, 1.1vw, 16px); }
 
 /* ── METRIC CARDS ── */
 .metric-card {
@@ -585,13 +583,169 @@ init_session()
 
 @st.cache_data(ttl=300)
 def fetch_ticker_info(ticker: str) -> Dict:
-    """Fetch full ticker info with graceful failure."""
+    """
+    Multi-source fundamental data fetch. Falls through 6 sources so that
+    every field is populated from live data even when .info is sparse.
+    No hardcoding anywhere.
+    """
+    merged: Dict = {}
     try:
         t = yf.Ticker(ticker)
-        info = t.info
-        if not info or len(info) < 3:
-            return {"error": f"No data for {ticker}"}
-        return info
+
+        # ── 1. .info (may be sparse for .NS tickers) ──────────────────────
+        try:
+            raw_info = t.info or {}
+            if isinstance(raw_info, dict) and len(raw_info) >= 3:
+                merged.update({k: v for k, v in raw_info.items()
+                                if v not in (None, "", "N/A", 0)})
+        except Exception:
+            pass
+
+        # ── 2. fast_info (reliable, price-based fields) ───────────────────
+        try:
+            fi = t.fast_info
+            fi_map = {
+                "marketCap":          getattr(fi, "market_cap", None),
+                "fiftyTwoWeekHigh":   getattr(fi, "fifty_two_week_high", None),
+                "fiftyTwoWeekLow":    getattr(fi, "fifty_two_week_low", None),
+                "regularMarketPrice": getattr(fi, "last_price", None),
+                "averageVolume":      getattr(fi, "three_month_average_volume", None),
+                "sharesOutstanding":  getattr(fi, "shares", None),
+                "currency":           getattr(fi, "currency", None),
+                "exchange":           getattr(fi, "exchange", None),
+            }
+            for k, v in fi_map.items():
+                if v is not None and v != 0 and k not in merged:
+                    merged[k] = v
+        except Exception:
+            pass
+
+        # ── 3. income_stmt → Revenue, Net Income, EPS ────────────────────
+        net_inc_val = None
+        try:
+            inc = t.income_stmt
+            if inc is not None and not inc.empty:
+                latest = inc.iloc[:, 0]
+                for key in ("Total Revenue", "TotalRevenue"):
+                    v = latest.get(key)
+                    if v is not None and "totalRevenue" not in merged:
+                        merged["totalRevenue"] = float(v); break
+                for key in ("Net Income", "NetIncome", "Net Income Common Stockholders"):
+                    v = latest.get(key)
+                    if v is not None and "netIncomeToCommon" not in merged:
+                        merged["netIncomeToCommon"] = float(v)
+                        net_inc_val = float(v); break
+                for key in ("Basic EPS", "Diluted EPS", "basicEPS"):
+                    v = latest.get(key)
+                    if v is not None and "trailingEps" not in merged:
+                        merged["trailingEps"] = float(v); break
+                for key in ("EBIT", "Operating Income"):
+                    v = latest.get(key)
+                    if v is not None and "ebit" not in merged:
+                        merged["ebit"] = float(v); break
+        except Exception:
+            pass
+
+        # ── 4. balance_sheet → D/E, Current Ratio, ROE, ROA, P/B ─────────
+        total_equity = None
+        try:
+            bs = t.balance_sheet
+            if bs is not None and not bs.empty:
+                lb = bs.iloc[:, 0]
+                total_debt = None
+                for key in ("Total Debt", "TotalDebt", "Long Term Debt"):
+                    v = lb.get(key)
+                    if v is not None:
+                        total_debt = float(v); break
+                for key in ("Common Stock Equity", "Stockholders Equity",
+                             "Total Stockholders Equity"):
+                    v = lb.get(key)
+                    if v is not None:
+                        total_equity = float(v); break
+                if total_debt is not None and total_equity and total_equity != 0                         and "debtToEquity" not in merged:
+                    merged["debtToEquity"] = round(total_debt / total_equity, 4)
+                curr_a = next((float(lb.get(k)) for k in
+                               ("Current Assets", "Total Current Assets")
+                               if lb.get(k) is not None), None)
+                curr_l = next((float(lb.get(k)) for k in
+                               ("Current Liabilities", "Total Current Liabilities")
+                               if lb.get(k) is not None), None)
+                if curr_a and curr_l and curr_l != 0 and "currentRatio" not in merged:
+                    merged["currentRatio"] = round(curr_a / curr_l, 4)
+                shares = merged.get("sharesOutstanding")
+                price  = merged.get("regularMarketPrice")
+                if total_equity and shares and shares != 0 and price                         and "priceToBook" not in merged:
+                    bvps = total_equity / float(shares)
+                    if bvps != 0:
+                        merged["priceToBook"] = round(float(price) / bvps, 4)
+                ni = net_inc_val or merged.get("netIncomeToCommon")
+                if ni and total_equity and total_equity != 0                         and "returnOnEquity" not in merged:
+                    merged["returnOnEquity"] = round(float(ni) / total_equity, 6)
+                total_assets = lb.get("Total Assets")
+                if total_assets and float(total_assets) != 0 and ni                         and "returnOnAssets" not in merged:
+                    merged["returnOnAssets"] = round(float(ni) / float(total_assets), 6)
+        except Exception:
+            pass
+
+        # ── 5. OHLCV → 52W High/Low, AvgVol, Beta (computed live) ────────
+        try:
+            df_h = yf.download(ticker, period="1y", interval="1d",
+                                progress=False, auto_adjust=True)
+            if df_h is not None and not df_h.empty:
+                if isinstance(df_h.columns, pd.MultiIndex):
+                    df_h.columns = df_h.columns.get_level_values(0)
+                close = df_h["Close"].squeeze()
+                if "fiftyTwoWeekHigh" not in merged:
+                    merged["fiftyTwoWeekHigh"] = round(float(df_h["High"].squeeze().max()), 2)
+                if "fiftyTwoWeekLow" not in merged:
+                    merged["fiftyTwoWeekLow"] = round(float(df_h["Low"].squeeze().min()), 2)
+                if "averageVolume" not in merged and "Volume" in df_h.columns:
+                    merged["averageVolume"] = int(df_h["Volume"].mean())
+                curr_price = float(close.iloc[-1])
+                if "regularMarketPrice" not in merged:
+                    merged["regularMarketPrice"] = round(curr_price, 2)
+                if "marketCap" not in merged and merged.get("sharesOutstanding"):
+                    merged["marketCap"] = int(curr_price * merged["sharesOutstanding"])
+                if "trailingPE" not in merged and merged.get("trailingEps", 0) != 0:
+                    merged["trailingPE"] = round(curr_price / merged["trailingEps"], 4)
+                if "forwardPE" not in merged and merged.get("forwardEps", 0) != 0:
+                    merged["forwardPE"] = round(curr_price / merged["forwardEps"], 4)
+                # Compute beta vs NIFTY from daily returns
+                if "beta" not in merged:
+                    try:
+                        bench = yf.download("^NSEI", period="1y", interval="1d",
+                                             progress=False, auto_adjust=True)
+                        if bench is not None and not bench.empty:
+                            if isinstance(bench.columns, pd.MultiIndex):
+                                bench.columns = bench.columns.get_level_values(0)
+                            sr = close.pct_change().dropna()
+                            br = bench["Close"].squeeze().pct_change().dropna()
+                            idx = sr.index.intersection(br.index)
+                            if len(idx) > 30:
+                                cm = np.cov(sr.loc[idx].values, br.loc[idx].values)
+                                if cm[1, 1] != 0:
+                                    merged["beta"] = round(cm[0, 1] / cm[1, 1], 3)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # ── 6. Dividends → yield ──────────────────────────────────────────
+        try:
+            if "dividendYield" not in merged:
+                divs = t.dividends
+                if divs is not None and not divs.empty:
+                    annual_div = float(divs.tail(4).sum())
+                    p = merged.get("regularMarketPrice")
+                    if p and p != 0:
+                        merged["dividendYield"] = round(annual_div / p, 6)
+        except Exception:
+            pass
+
+        if not merged:
+            return {"error": f"No data available for {ticker}"}
+        return merged
+
     except Exception as e:
         return {"error": str(e)}
 
@@ -695,8 +849,9 @@ def fetch_news_feed() -> List[Dict]:
             if not feed or not feed.entries:
                 continue
             for entry in feed.entries[:8]:
-                title = entry.get("title", "")
                 import re
+                raw_title = entry.get("title", "")
+                title = re.sub(r'<[^>]+>', '', raw_title).strip()
                 raw_summary = entry.get("summary", "")
                 summary = re.sub(r'<[^>]+>', '', raw_summary).strip()
                 link = entry.get("link", "#")
@@ -1596,8 +1751,12 @@ def page_stock_explorer():
 
     # ── Top KPIs ──
     company_name = info.get("longName", ticker.replace(".NS", ""))
-    sector = info.get("sector", "Unknown")
-    industry = info.get("industry", "")
+    # Derive sector from NSE_SECTORS mapping when .info is sparse
+    _derived_sector = next(
+        (sec for sec, tickers in NSE_SECTORS.items() if ticker in tickers), None
+    )
+    sector = info.get("sector") or _derived_sector or ticker.replace(".NS", "")
+    industry = info.get("industry") or info.get("exchange") or ""
     market_cap = info.get("marketCap", 0)
 
     st.markdown(f"""
