@@ -2227,7 +2227,7 @@ def page_news():
         tag_cls = tag_map.get(cat, "news-tag-general")
         ticker_badges = " ".join([f'<span class="badge-neutral" style="font-size:0.6rem;">{t.replace(".NS","")}</span>'
                                    for t in article.get("tickers", [])])
-        link_html = f'<a href="{article["link"]}" target="_blank" style="color:var(--accent);font-size:0.68rem;font-weight:600;text-decoration:none;">Read →</a>' if article.get("link", "#") != "#" else ""
+        link_href = article.get("link", "#")
         st.markdown(f"""
         <div class="news-card">
             <div class="news-title">{icon} {article['title']}</div>
@@ -2235,7 +2235,7 @@ def page_news():
                 <span class="{tag_cls}">{cat.upper()}</span>
                 <span>{article.get('source','')}</span>
                 {ticker_badges}
-                {link_html}
+                {'<a href="' + link_href + '" target="_blank" style="color:var(--accent);font-size:0.68rem;font-weight:600;text-decoration:none;">Read →</a>' if link_href and link_href != '#' else ''}
             </div>
         </div>
         """, unsafe_allow_html=True)
