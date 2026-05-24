@@ -681,8 +681,9 @@ def fetch_news_feed() -> List[Dict]:
             if not feed or not feed.entries:
                 continue
             for entry in feed.entries[:8]:
-                title = entry.get("title", "")
                 import re
+                raw_title = entry.get("title", "")
+                title = re.sub(r'<[^>]+>', '', raw_title).strip()
                 raw_summary = entry.get("summary", "")
                 summary = re.sub(r'<[^>]+>', '', raw_summary).strip()
                 link = entry.get("link", "#")
