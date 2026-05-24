@@ -208,46 +208,60 @@ CUSTOM_CSS = """
     margin-top: 2px;
 }
 
+/* ── GLOBAL DYNAMIC FONT SCALING ── */
+html {
+    font-size: clamp(12px, 1.1vw, 16px);
+}
+
 /* ── METRIC CARDS ── */
 .metric-card {
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 1rem 1.25rem;
+    padding: 0.85rem 1rem;
     box-shadow: var(--shadow-sm);
     transition: box-shadow 0.2s ease;
     position: relative;
     overflow: hidden;
+    min-width: 0;
 }
 .metric-card:hover { box-shadow: var(--shadow-md); }
 .metric-label {
-    font-size: 0.7rem;
+    font-size: clamp(0.55rem, 0.65vw, 0.7rem);
     font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.07em;
     margin-bottom: 0.35rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .metric-value {
-    font-size: 1.5rem;
+    font-size: clamp(0.85rem, 1.4vw, 1.5rem);
     font-weight: 700;
     color: var(--text-primary);
     font-family: 'DM Mono', monospace;
     letter-spacing: -0.02em;
-    line-height: 1;
+    line-height: 1.1;
     margin-bottom: 0.3rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .metric-change-pos {
-    font-size: 0.78rem;
+    font-size: clamp(0.65rem, 0.75vw, 0.78rem);
     font-weight: 600;
     color: var(--positive);
     font-family: 'DM Mono', monospace;
+    white-space: nowrap;
 }
 .metric-change-neg {
-    font-size: 0.78rem;
+    font-size: clamp(0.65rem, 0.75vw, 0.78rem);
     font-weight: 600;
     color: var(--negative);
     font-family: 'DM Mono', monospace;
+    white-space: nowrap;
 }
 .metric-source {
     font-size: 0.62rem;
@@ -571,210 +585,13 @@ init_session()
 
 @st.cache_data(ttl=300)
 def fetch_ticker_info(ticker: str) -> Dict:
-    """
-    Fetch ticker fundamentals with a multi-source fallback strategy.
-    Priority: .info -> fast_info -> financials/balance_sheet -> OHLCV-derived.
-    Zero hardcoding - every value is computed from live market data.
-    """
-    merged: Dict = {}
-
+    """Fetch full ticker info with graceful failure."""
     try:
         t = yf.Ticker(ticker)
-
-        # Source 1: .info (may be sparse for .NS)
-        try:
-            raw_info = t.info or {}
-            if len(raw_info) >= 3:
-                merged.update({k: v for k, v in raw_info.items() if v not in (None, "", "N/A", 0)})
-        except Exception:
-            pass
-
-        # Source 2: fast_info (always works, covers price-derived fields)
-        try:
-            fi = t.fast_info
-            fi_map = {
-                "marketCap":          getattr(fi, "market_cap", None),
-                "fiftyTwoWeekHigh":   getattr(fi, "fifty_two_week_high", None),
-                "fiftyTwoWeekLow":    getattr(fi, "fifty_two_week_low", None),
-                "regularMarketPrice": getattr(fi, "last_price", None),
-                "averageVolume":      getattr(fi, "three_month_average_volume", None),
-                "sharesOutstanding":  getattr(fi, "shares", None),
-                "currency":           getattr(fi, "currency", None),
-                "exchange":           getattr(fi, "exchange", None),
-            }
-            for k, v in fi_map.items():
-                if v and k not in merged:
-                    merged[k] = v
-        except Exception:
-            pass
-
-        # Source 3: income statement -> EPS, Revenue, Net Income
-        net_inc_val = None
-        try:
-            inc = t.income_stmt
-            if inc is not None and not inc.empty:
-                latest = inc.iloc[:, 0]
-
-                for key in ("Total Revenue", "TotalRevenue"):
-                    val = latest.get(key)
-                    if val is not None and "totalRevenue" not in merged:
-                        merged["totalRevenue"] = float(val)
-                        break
-
-                for key in ("Net Income", "NetIncome"):
-                    val = latest.get(key)
-                    if val is not None and "netIncomeToCommon" not in merged:
-                        merged["netIncomeToCommon"] = float(val)
-                        net_inc_val = float(val)
-                        break
-
-                for key in ("EBIT", "Operating Income"):
-                    val = latest.get(key)
-                    if val is not None and "ebit" not in merged:
-                        merged["ebit"] = float(val)
-                        break
-        except Exception:
-            pass
-
-        # Source 4: balance sheet -> Debt/Equity, Current Ratio, ROE, ROA, P/B
-        try:
-            bs = t.balance_sheet
-            if bs is not None and not bs.empty:
-                latest_bs = bs.iloc[:, 0]
-
-                total_debt = None
-                for key in ("Total Debt", "TotalDebt", "Long Term Debt"):
-                    v = latest_bs.get(key)
-                    if v is not None:
-                        total_debt = float(v)
-                        break
-
-                total_equity = None
-                for key in ("Stockholders Equity", "Total Stockholders Equity", "Common Stock Equity"):
-                    v = latest_bs.get(key)
-                    if v is not None:
-                        total_equity = float(v)
-                        break
-
-                if total_debt is not None and total_equity and total_equity != 0 and "debtToEquity" not in merged:
-                    merged["debtToEquity"] = round(total_debt / total_equity, 4)
-
-                curr_assets = None
-                for key in ("Current Assets", "Total Current Assets"):
-                    v = latest_bs.get(key)
-                    if v is not None:
-                        curr_assets = float(v)
-                        break
-
-                curr_liab = None
-                for key in ("Current Liabilities", "Total Current Liabilities"):
-                    v = latest_bs.get(key)
-                    if v is not None:
-                        curr_liab = float(v)
-                        break
-
-                if curr_assets and curr_liab and curr_liab != 0 and "currentRatio" not in merged:
-                    merged["currentRatio"] = round(curr_assets / curr_liab, 4)
-
-                book_val = total_equity
-                shares = merged.get("sharesOutstanding")
-                price = merged.get("regularMarketPrice")
-                if book_val and shares and shares != 0 and price and "priceToBook" not in merged:
-                    bvps = book_val / float(shares)
-                    if bvps != 0:
-                        merged["priceToBook"] = round(float(price) / bvps, 4)
-
-                net_inc_for_roe = net_inc_val or merged.get("netIncomeToCommon")
-                if net_inc_for_roe and total_equity and total_equity != 0 and "returnOnEquity" not in merged:
-                    merged["returnOnEquity"] = round(float(net_inc_for_roe) / total_equity, 6)
-
-                total_assets = None
-                for key in ("Total Assets",):
-                    v = latest_bs.get(key)
-                    if v is not None:
-                        total_assets = float(v)
-                        break
-                if total_assets and total_assets != 0 and net_inc_for_roe and "returnOnAssets" not in merged:
-                    merged["returnOnAssets"] = round(float(net_inc_for_roe) / total_assets, 6)
-        except Exception:
-            pass
-
-        # Source 5: OHLCV-derived metrics (always available)
-        try:
-            df_hist = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
-            if df_hist is not None and not df_hist.empty:
-                if isinstance(df_hist.columns, pd.MultiIndex):
-                    df_hist.columns = df_hist.columns.get_level_values(0)
-                close = df_hist["Close"].squeeze()
-                high = df_hist["High"].squeeze()
-                low = df_hist["Low"].squeeze()
-
-                if "fiftyTwoWeekHigh" not in merged:
-                    merged["fiftyTwoWeekHigh"] = round(float(high.max()), 2)
-                if "fiftyTwoWeekLow" not in merged:
-                    merged["fiftyTwoWeekLow"] = round(float(low.min()), 2)
-                if "averageVolume" not in merged and "Volume" in df_hist.columns:
-                    merged["averageVolume"] = int(df_hist["Volume"].mean())
-
-                curr_price = float(close.iloc[-1])
-                if "regularMarketPrice" not in merged:
-                    merged["regularMarketPrice"] = round(curr_price, 2)
-
-                # Beta vs NIFTY computed live from OHLCV
-                if "beta" not in merged:
-                    try:
-                        bench = yf.download("^NSEI", period="1y", interval="1d", progress=False, auto_adjust=True)
-                        if bench is not None and not bench.empty:
-                            if isinstance(bench.columns, pd.MultiIndex):
-                                bench.columns = bench.columns.get_level_values(0)
-                            s_rets = close.pct_change().dropna()
-                            b_rets = bench["Close"].squeeze().pct_change().dropna()
-                            common_idx = s_rets.index.intersection(b_rets.index)
-                            if len(common_idx) > 30:
-                                s_a = s_rets.loc[common_idx].values
-                                b_a = b_rets.loc[common_idx].values
-                                cov_m = np.cov(s_a, b_a)
-                                if cov_m[1, 1] != 0:
-                                    merged["beta"] = round(cov_m[0, 1] / cov_m[1, 1], 3)
-                    except Exception:
-                        pass
-
-                # Market cap from price x shares if still missing
-                if "marketCap" not in merged and "sharesOutstanding" in merged:
-                    merged["marketCap"] = int(curr_price * merged["sharesOutstanding"])
-
-                # P/E from price / EPS if both available
-                if "trailingPE" not in merged:
-                    eps = merged.get("trailingEps")
-                    if eps and eps != 0:
-                        merged["trailingPE"] = round(curr_price / eps, 4)
-
-                # Forward P/E from price / forward EPS
-                if "forwardPE" not in merged:
-                    feps = merged.get("forwardEps")
-                    if feps and feps != 0:
-                        merged["forwardPE"] = round(curr_price / feps, 4)
-
-        except Exception:
-            pass
-
-        # Source 6: dividends -> dividend yield
-        try:
-            if "dividendYield" not in merged:
-                divs = t.dividends
-                if divs is not None and not divs.empty:
-                    annual_div = float(divs.tail(4).sum())
-                    price_now = merged.get("regularMarketPrice")
-                    if price_now and price_now != 0:
-                        merged["dividendYield"] = round(annual_div / price_now, 6)
-        except Exception:
-            pass
-
-        if not merged:
-            return {"error": f"No data available for {ticker}"}
-
-        return merged
-
+        info = t.info
+        if not info or len(info) < 3:
+            return {"error": f"No data for {ticker}"}
+        return info
     except Exception as e:
         return {"error": str(e)}
 
@@ -1889,7 +1706,7 @@ def page_stock_explorer():
                     st.markdown(f"""
                     <div class="metric-card">
                         <div class="metric-label">{lbl}</div>
-                        <div class="metric-value" style="font-size:1.1rem;">{val}</div>
+                        <div class="metric-value">{val}</div>
                         <div class="metric-source">{sub}</div>
                     </div>
                     """, unsafe_allow_html=True)
@@ -1909,7 +1726,7 @@ def page_stock_explorer():
                     st.markdown(f"""
                     <div class="metric-card">
                         <div class="metric-label">{lbl}</div>
-                        <div class="metric-value" style="font-size:1rem;">{val}</div>
+                        <div class="metric-value">{val}</div>
                         <div style="font-size:0.72rem;font-weight:600;color:{color};">{sub}</div>
                     </div>
                     """, unsafe_allow_html=True)
@@ -1954,7 +1771,7 @@ def page_stock_explorer():
                         st.markdown(f"""
                         <div class="metric-card">
                             <div class="metric-label">{lbl}</div>
-                            <div class="metric-value" style="font-size:1rem;">{val}</div>
+                            <div class="metric-value">{val}</div>
                         </div>
                         """, unsafe_allow_html=True)
         else:
@@ -2279,7 +2096,7 @@ def page_portfolio():
                 st.markdown(f"""
                 <div class="metric-card">
                     <div class="metric-label">{lbl}</div>
-                    <div class="metric-value" style="font-size:1.1rem;">{val}</div>
+                    <div class="metric-value">{val}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
