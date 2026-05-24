@@ -174,6 +174,49 @@ CUSTOM_CSS = """
     background-color: var(--bg-primary);
 }
 
+/* ── SIDEBAR TOGGLE BUTTON (hamburger) ── */
+[data-testid="stSidebarCollapsedControl"],
+button[data-testid="collapsedControl"],
+[data-testid="stSidebarCollapsedControl"] button {
+    width: 48px !important;
+    height: 48px !important;
+    background: var(--accent) !important;
+    border-radius: 12px !important;
+    border: none !important;
+    box-shadow: 0 4px 14px rgba(27,108,168,0.35) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    cursor: pointer !important;
+    position: fixed !important;
+    top: 14px !important;
+    left: 14px !important;
+    z-index: 999999 !important;
+    transition: background 0.2s ease, box-shadow 0.2s ease !important;
+}
+[data-testid="stSidebarCollapsedControl"]:hover,
+button[data-testid="collapsedControl"]:hover {
+    background: var(--accent-dark) !important;
+    box-shadow: 0 6px 18px rgba(27,108,168,0.45) !important;
+}
+/* Replace the default arrow icon with a hamburger via pseudo-element */
+[data-testid="stSidebarCollapsedControl"] svg,
+button[data-testid="collapsedControl"] svg {
+    display: none !important;
+}
+[data-testid="stSidebarCollapsedControl"]::after,
+button[data-testid="collapsedControl"]::after {
+    content: '' !important;
+    display: block !important;
+    width: 22px !important;
+    height: 16px !important;
+    background:
+        linear-gradient(white, white) 0 0/100% 2.5px no-repeat,
+        linear-gradient(white, white) 0 50%/100% 2.5px no-repeat,
+        linear-gradient(white, white) 0 100%/100% 2.5px no-repeat !important;
+    border-radius: 2px !important;
+}
+
 /* ── SIDEBAR ── */
 [data-testid="stSidebar"] {
     background: var(--bg-card) !important;
