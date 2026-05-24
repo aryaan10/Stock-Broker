@@ -682,7 +682,9 @@ def fetch_news_feed() -> List[Dict]:
                 continue
             for entry in feed.entries[:8]:
                 title = entry.get("title", "")
-                summary = entry.get("summary", "")
+                import re
+                raw_summary = entry.get("summary", "")
+                summary = re.sub(r'<[^>]+>', '', raw_summary).strip()
                 link = entry.get("link", "#")
                 published = entry.get("published", "")
                 if not title:
@@ -1606,7 +1608,18 @@ def page_stock_explorer():
         ]
         for i, (label, val, chg) in enumerate(kpis):
             with kpi_cols[i]:
-                st.markdown(render_metric_card(label, val, chg), unsafe_allow_html=True)
+                change_html = ""
+                if chg is not None:
+                    arrow = "▲" if chg >= 0 else "▼"
+                    cls = "metric-change-pos" if chg >= 0 else "metric-change-neg"
+                    change_html = f'<div class="{cls}">{arrow} {abs(chg):.2f}%</div>'
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-label">{label}</div>
+                    <div class="metric-value">{val}</div>
+                    {change_html}
+                </div>
+                """, unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
