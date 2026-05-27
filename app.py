@@ -1603,12 +1603,13 @@ def render_metric_card(label: str, value: str, change: Optional[float] = None,
         arrow = "▲" if change >= 0 else "▼"
         cls = "metric-change-pos" if change >= 0 else "metric-change-neg"
         change_html = f'<div class="{cls}">{arrow} {abs(change):.2f}%</div>'
+    source_html = f'<div class="metric-source">{source}</div>' if source else ""
     return f"""
     <div class="metric-card">
         <div class="metric-label">{label}</div>
         <div class="metric-value">{prefix}{value}</div>
         {change_html}
-        <div class="metric-source">{source}</div>
+        {source_html}
     </div>
     """
 
