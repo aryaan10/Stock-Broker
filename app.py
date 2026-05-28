@@ -604,6 +604,7 @@ def init_session():
         "user_id": None,
         "cash_balance": 500000.0,        # ₹5 lakh default
         "initial_balance": 500000.0,
+        "realized_pnl_total": 0.0,
         "holdings": {},                   # {ticker: {qty, avg_cost, sector}}
         "order_history": [],              # list of order dicts
         "watchlist": [],                  # list of tickers
@@ -1343,6 +1344,8 @@ def validate_and_place_order(
         realized_pnl = (execution_price - pos["avg_cost"]) * qty
         proceeds = execution_price * qty
         st.session_state.cash_balance += proceeds
+        realized_pnl = (execution_price - pos["avg_cost"]) * qty
+        st.session_state.realized_pnl_total += realized_pnl
         new_qty = pos["qty"] - qty
         if new_qty == 0:
             del holdings[ticker]
@@ -1370,8 +1373,7 @@ def validate_and_place_order(
         "sector": sector,
     }
     if action == "SELL":
-        order_record["realized_pnl"] = round((execution_price - st.session_state.holdings.get(ticker, {}).get("avg_cost", execution_price)) * qty if ticker in st.session_state.holdings else 0, 2)
-
+        order_record["realized_pnl"] = round((execution_price - pos["avg_cost"]) * qty, 2)
     st.session_state.order_history.insert(0, order_record)
     notification = f"{'🟢' if action == 'BUY' else '🔴'} {action} {qty} × {ticker.replace('.NS','')} @ ₹{execution_price:,.2f}"
     st.session_state.notifications.insert(0, {"msg": notification, "ts": timestamp})
@@ -2644,7 +2646,7 @@ def render_sidebar():
                 st.rerun()
         else:
             initials = "".join([w[0].upper() for w in st.session_state.user_name.split()[:2]])
-            pnl_total = st.session_state.cash_balance - st.session_state.initial_balance
+            pnl_total = st.session_state.realized_pnl_total
             # Add portfolio value estimate
             st.markdown(f"""
             <div style="background:var(--accent-light);border:1px solid var(--border);border-radius:var(--radius);
