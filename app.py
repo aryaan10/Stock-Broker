@@ -3102,7 +3102,7 @@ def page_stress_test():
     <div style="background:linear-gradient(135deg,#FEF3F2 0%,#FFF8F1 100%);
         border:1px solid #FECACA;border-radius:12px;padding:1.2rem 1.5rem;margin-bottom:1.5rem;">
         <div style="font-size:0.78rem;font-weight:700;color:#991B1B;margin-bottom:0.4rem;">
-            ⚠  QUANTITATIVE RISK SIMULATION — FOR EDUCATIONAL PURPOSES
+            ⚠  QUANTITATIVE RISK SIMULATION
         </div>
         <div style="font-size:0.73rem;color:#7F1D1D;line-height:1.6;">
             Simulations use Geometric Brownian Motion with Student-t innovations (fat tails),
@@ -3907,7 +3907,7 @@ def render_sidebar():
         <div style="font-size:0.6rem;color:var(--text-muted);text-align:center;line-height:1.6;">
             FinTerminal India v1.0<br>
             Data via Yahoo Finance + RSS<br>
-            <span style="color:var(--negative);">⚠ Simulated trading only</span>
+            Developed by Aryaan Pandhare
         </div>
         """, unsafe_allow_html=True)
 
