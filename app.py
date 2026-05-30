@@ -3178,6 +3178,26 @@ def page_stress_test():
         sc_data["daily_drift_crisis"] = (
             sc_data["nifty_peak_to_trough"] / sc_data["duration_trading_days"]
         ) * 1.2   # slightly faster than linear for realism
+        st.markdown("<br>", unsafe_allow_html=True)
+        section_header("Custom Sector Shock Multipliers", "📐")
+        st.markdown(
+            "Set how hard each sector is hit **relative to the Nifty** drawdown you specified above. "
+            "1.0× = in line with market. >1.0× = sector falls harder. <1.0× = defensive outperformance.",
+            help="Multiplier × Nifty drawdown = implied sector drawdown"
+        )
+        default_mults = CRISIS_SCENARIOS["Custom Scenario (User Defined)"]["sector_multipliers"]
+        custom_sector_mults = {}
+        sect_slider_cols = st.columns(4)
+        for s_idx, (sect_name, def_mult) in enumerate(default_mults.items()):
+            with sect_slider_cols[s_idx % 4]:
+                custom_sector_mults[sect_name] = st.slider(
+                    f"{sect_name}",
+                    min_value=0.10, max_value=3.00,
+                    value=float(def_mult), step=0.05,
+                    key=f"custom_sect_{sect_name}",
+                    help=f"Implied drawdown: {custom_drawdown * def_mult:.1f}%"
+                )
+        sc_data["sector_multipliers"] = custom_sector_mults
 
     # ── SELECTED SCENARIO DETAILS ─────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
@@ -3186,35 +3206,15 @@ def page_stress_test():
     mc = sc_data["macro_context"]
     col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
     with col_m1:
-        st.markdown(render_metric_card(
-            "Nifty Peak→Trough",
-            f"{sc_data['nifty_peak_to_trough']*100:+.1f}%",
-            None, "Historical NSE"
-        ), unsafe_allow_html=True)
+        st.metric("Nifty Peak→Trough", f"{sc_data['nifty_peak_to_trough']*100:+.1f}%")
     with col_m2:
-        st.markdown(render_metric_card(
-            "Crash Duration",
-            f"{sc_data['duration_trading_days']} days",
-            None, "Trading days"
-        ), unsafe_allow_html=True)
+        st.metric("Crash Duration", f"{sc_data['duration_trading_days']} days")
     with col_m3:
-        st.markdown(render_metric_card(
-            "India VIX Peak",
-            f"{mc['india_vix_peak']}",
-            None, "Volatility index"
-        ), unsafe_allow_html=True)
+        st.metric("India VIX Peak", str(mc['india_vix_peak']))
     with col_m4:
-        st.markdown(render_metric_card(
-            "USD/INR Move",
-            f"{mc['usdinr_move_pct']:+.1f}%",
-            None, "Rupee depreciation"
-        ), unsafe_allow_html=True)
+        st.metric("USD/INR Move", f"{mc['usdinr_move_pct']:+.1f}%")
     with col_m5:
-        st.markdown(render_metric_card(
-            "Recovery",
-            f"{sc_data['recovery_months']}m",
-            None, "Months to reclaim peak"
-        ), unsafe_allow_html=True)
+        st.metric("Recovery", f"{sc_data['recovery_months']}m")
 
     st.markdown(f"""
     <div class="alert-info" style="margin-top:0.75rem;">
@@ -3331,12 +3331,21 @@ def page_stress_test():
                 ticker_clean = raw_ticker.strip().upper()
                 if not ticker_clean.endswith(".NS"):
                     ticker_clean += ".NS"
-                stress_holdings[ticker_clean] = {
-                    "qty":      int(qty_in),
-                    "avg_cost": float(avg_cost_in),
-                    "sector":   sector_in,
-                }
-                valid_rows += 1
+                # Live validation — try fast_info; if it returns no last_price, ticker is invalid
+                try:
+                    _fi = yf.Ticker(ticker_clean).fast_info
+                    _price = getattr(_fi, "last_price", None)
+                    if _price is None or _price <= 0:
+                        st.warning(f"⚠ **{ticker_clean.replace('.NS','')}** — ticker not found on NSE. Check spelling and try again.", icon="⚠️")
+                    else:
+                        stress_holdings[ticker_clean] = {
+                            "qty":      int(qty_in),
+                            "avg_cost": float(avg_cost_in),
+                            "sector":   sector_in,
+                        }
+                        valid_rows += 1
+                except Exception:
+                    st.warning(f"⚠ **{ticker_clean.replace('.NS','')}** — could not validate. Check NSE ticker symbol.", icon="⚠️")
 
         add_col, rem_col = st.columns([1, 1])
         with add_col:
@@ -3453,43 +3462,25 @@ def page_stress_test():
     section_header("Key Risk Metrics", "📐")
 
     m_cols = st.columns(4)
-    metrics_data = [
-        ("Median P&L",       f"₹{results['median_pnl']:+,.0f}", f"{results['median_pnl_pct']:+.1f}%"),
-        ("VaR 95% (MC)",     f"₹{results['var_95_hist']:,.0f}", "5% worst loss"),
-        ("CVaR 95%",         f"₹{results['cvar_95']:,.0f}",    "Exp. shortfall"),
-        ("Median Max DD",    f"{results['median_max_drawdown_pct']:.1f}%", "Intra-path drawdown"),
-    ]
-    for col_idx, (label, val, sub) in enumerate(metrics_data):
-        with m_cols[col_idx]:
-            is_neg = val.startswith("₹-") or (val.startswith("-") and "%" in val)
-            color  = "var(--negative)" if is_neg else "var(--text-primary)"
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">{label}</div>
-                <div style="font-family:'DM Mono',monospace;font-size:1.15rem;font-weight:700;
-                    color:{color};line-height:1.2;">{val}</div>
-                <div style="font-size:0.65rem;color:var(--text-muted);margin-top:0.3rem;">{sub}</div>
-            </div>
-            """, unsafe_allow_html=True)
+    with m_cols[0]:
+        st.metric("Median P&L", f"₹{results['median_pnl']:+,.0f}", f"{results['median_pnl_pct']:+.1f}%")
+    with m_cols[1]:
+        st.metric("VaR 95% (MC)", f"₹{results['var_95_hist']:,.0f}", "5% worst loss")
+    with m_cols[2]:
+        st.metric("CVaR 95%", f"₹{results['cvar_95']:,.0f}", "Exp. shortfall")
+    with m_cols[3]:
+        st.metric("Median Max DD", f"{results['median_max_drawdown_pct']:.1f}%", "Intra-path drawdown")
 
     # Second metrics row
     m_cols2 = st.columns(4)
-    metrics_data2 = [
-        ("P(loss > 10%)",    f"{results['prob_loss_10pct']:.1f}%", "Probability of >10% loss"),
-        ("P(loss > 20%)",    f"{results['prob_loss_20pct']:.1f}%", "Probability of >20% loss"),
-        ("VaR 99% (MC)",     f"₹{results['var_99_hist']:,.0f}", "1% worst loss"),
-        ("Portfolio Beta",   f"{results['portfolio_beta']:.3f}",   "vs Nifty 50"),
-    ]
-    for col_idx, (label, val, sub) in enumerate(metrics_data2):
-        with m_cols2[col_idx]:
-            st.markdown(f"""
-            <div class="metric-card" style="margin-top:0.5rem;">
-                <div class="metric-label">{label}</div>
-                <div style="font-family:'DM Mono',monospace;font-size:1.05rem;font-weight:700;
-                    color:var(--text-primary);line-height:1.2;">{val}</div>
-                <div style="font-size:0.65rem;color:var(--text-muted);margin-top:0.3rem;">{sub}</div>
-            </div>
-            """, unsafe_allow_html=True)
+    with m_cols2[0]:
+        st.metric("P(loss > 10%)", f"{results['prob_loss_10pct']:.1f}%")
+    with m_cols2[1]:
+        st.metric("P(loss > 20%)", f"{results['prob_loss_20pct']:.1f}%")
+    with m_cols2[2]:
+        st.metric("VaR 99% (MC)", f"₹{results['var_99_hist']:,.0f}")
+    with m_cols2[3]:
+        st.metric("Portfolio Beta", f"{results['portfolio_beta']:.3f}")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -3673,36 +3664,24 @@ def page_stress_test():
         st.plotly_chart(fig_var, use_container_width=True, config=plotly_chart_config())
 
     with var_col2:
-        # Explanation card
-        pv = results["portfolio_value"]
+        pv         = results["portfolio_value"]
         var95_pct  = results["var_95_hist"] / pv * 100
         cvar95_pct = results["cvar_95"] / pv * 100
         var99_pct  = results["var_99_hist"] / pv * 100
-        cvar99_pct = results["cvar_99"] / pv * 100
 
-        st.markdown(f"""
-        <div style="background:var(--bg-card);border:1px solid var(--border);
-            border-radius:10px;padding:1.25rem 1.5rem;height:100%;">
-            <div style="font-size:0.7rem;font-weight:700;color:var(--text-muted);
-                text-transform:uppercase;margin-bottom:1rem;">Risk Metric Interpretation</div>
-            <div style="font-size:0.75rem;line-height:1.7;color:var(--text-secondary);">
-                <b style="color:var(--accent);">VaR 95% (MC) = ₹{results['var_95_hist']:,.0f} ({var95_pct:.1f}%)</b><br>
-                In the worst 5% of scenarios, your portfolio loses at least this amount 
-                over {results['horizon_days']} trading days under {sc_used} conditions.<br><br>
-
-                <b style="color:#7C3AED;">CVaR 95% = ₹{results['cvar_95']:,.0f} ({cvar95_pct:.1f}%)</b><br>
-                The <i>average</i> loss in those worst-5% scenarios — the 'expected shortfall'.
-                This is what risk managers at banks and hedge funds monitor daily.<br><br>
-
-                <b style="color:#D92D20;">VaR 99% = ₹{results['var_99_hist']:,.0f} ({var99_pct:.1f}%)</b><br>
-                In a 1-in-100 scenario, losses exceed this level.<br><br>
-
-                <b>Parametric VaR</b> assumes normally distributed returns (underestimates 
-                tail risk). Monte Carlo uses Student-t innovations (fatter tails), giving 
-                a more conservative and realistic estimate.
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("**Risk Metric Interpretation**")
+        st.markdown(
+            f"🔵 **VaR 95% (MC) = ₹{results['var_95_hist']:,.0f} ({var95_pct:.1f}%)**  \n"
+            f"In the worst 5% of scenarios, your portfolio loses at least this amount "
+            f"over {results['horizon_days']} trading days under *{sc_used}* conditions.\n\n"
+            f"🟣 **CVaR 95% = ₹{results['cvar_95']:,.0f} ({cvar95_pct:.1f}%)**  \n"
+            f"The *average* loss in those worst-5% scenarios — the Expected Shortfall. "
+            f"This is what risk managers at banks and hedge funds monitor daily.\n\n"
+            f"🔴 **VaR 99% = ₹{results['var_99_hist']:,.0f} ({var99_pct:.1f}%)**  \n"
+            f"In a 1-in-100 scenario, losses exceed this level.\n\n"
+            f"**Parametric VaR** assumes normally distributed returns (underestimates tail risk). "
+            f"Monte Carlo uses Student-t innovations (fatter tails) — a more conservative estimate."
+        )
 
     # ── SECTOR IMPACT WATERFALL ────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
