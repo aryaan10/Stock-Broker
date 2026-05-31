@@ -3866,13 +3866,13 @@ def render_sidebar():
 
         # Navigation
         nav_items = [
-            ("Market Overview"),
-            ("Stock Explorer"),
-            ("Orders"),
-            ("Portfolio"),
-            # ( "News Terminal"),
-            ("Watchlist"),
-            ("Stress Test"),
+            ("", "Market Overview"),
+            ("", "Stock Explorer"),
+            ("", "Orders"),
+            ("", "Portfolio"),
+            # ("📰", "News Terminal"),
+            ("", "Watchlist"),
+            ("", "Stress Test"),
         ]
         st.markdown('<div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.5rem;">Navigation</div>', unsafe_allow_html=True)
         for icon, label in nav_items:
