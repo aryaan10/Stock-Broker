@@ -1575,7 +1575,6 @@ def render_header():
         <div class="main-header">
             <div>
                 <div class="brand-name">FinTerminal</div>
-                <div class="brand-tagline">India's Institutional-Grade Retail Terminal</div>
             </div>
             <div style="display:flex;gap:1rem;align-items:center;">
                 {status_html}
@@ -3096,7 +3095,7 @@ def page_stress_test():
     User enters their equity holdings (or imports from existing simulation holdings),
     selects a historical crisis, and sees a full Monte Carlo stress report.
     """
-    section_header("Stress Test Your Portfolio", "🧨")
+    section_header("Stress Test Your Portfolio")
 
     st.markdown("""
     <div style="background:linear-gradient(135deg,#FEF3F2 0%,#FFF8F1 100%);
@@ -3867,13 +3866,13 @@ def render_sidebar():
 
         # Navigation
         nav_items = [
-            ("📊", "Market Overview"),
-            ("🔍", "Stock Explorer"),
-            ("📋", "Orders"),
-            ("💼", "Portfolio"),
-            # ("📰", "News Terminal"),
-            ("⭐", "Watchlist"),
-            ("🧨", "Stress Test"),
+            ("Market Overview"),
+            ("Stock Explorer"),
+            ("Orders"),
+            ("Portfolio"),
+            # ( "News Terminal"),
+            ("Watchlist"),
+            ("Stress Test"),
         ]
         st.markdown('<div style="font-size:0.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.5rem;">Navigation</div>', unsafe_allow_html=True)
         for icon, label in nav_items:
